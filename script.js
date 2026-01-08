@@ -23,6 +23,7 @@ const root = document.getElementById("three-root");
 let renderer;
 let scene;
 let camera;
+let controls;
 let width = 0;
 let height = 0;
 
@@ -41,19 +42,10 @@ const emojiTextures = new Map();
 const animations = [];
 let selectedIds = [];
 let hoverId = null;
-let isRotating = false;
-let lastPointer = { x: 0, y: 0 };
 let modeLabel = "Hard";
-let touchMoved = false;
-let isTouchRotating = false;
-let pinchStartDist = 0;
-let pinchStartZoom = 1;
-const pointerStates = new Map();
-const cameraControls = {
-  rotateSpeed: 0.005,
-  touchRotateThreshold: 8,
-  zoomMin: 0.7,
-  zoomMax: 1.8,
+const touchState = {
+  moved: false,
+  pointers: new Map(),
 };
 
 const raycaster = new THREE.Raycaster();
@@ -87,11 +79,29 @@ function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio || 1);
   root.appendChild(renderer.domElement);
+  renderer.domElement.style.touchAction = "none";
 
   scene = new THREE.Scene();
   camera = new THREE.OrthographicCamera(0, 1, 1, 0, -500, 500);
   camera.zoom = 1;
   scene.add(camera);
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.enablePan = false;
+  controls.enableZoom = true;
+  controls.rotateSpeed = 0.6;
+  controls.zoomSpeed = 0.8;
+  controls.minZoom = 0.7;
+  controls.maxZoom = 1.8;
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.PAN,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.ROTATE,
+  };
+  controls.touches = {
+    ONE: THREE.TOUCH.PAN,
+    TWO: THREE.TOUCH.DOLLY_ROTATE,
+  };
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.95);
   const dir = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -158,6 +168,10 @@ function layout() {
   boardFrame.scale.set(boardLayout.extent, boardLayout.extent, boardLayout.extent);
   camera.position.set(0, 0, boardLayout.extent * 1.4);
   camera.lookAt(0, 0, 0);
+  if (controls) {
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
 
   layoutHud();
   layoutTitleScreen();
@@ -430,6 +444,7 @@ function tick(now) {
   updateTilesVisuals();
   updateTitleButtonPulse(now);
   updateScreenVisibility();
+  if (controls) controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
@@ -482,20 +497,13 @@ function shuffleArray(list) {
 function onPointerDown(event) {
   const { x, y } = getPointer(event);
   if (event.pointerType === "touch") {
-    pointerStates.set(event.pointerId, { x, y, startX: x, startY: y });
-    if (pointerStates.size === 2) {
-      const points = Array.from(pointerStates.values());
-      pinchStartDist = getPointerDistance(points[0], points[1]);
-      pinchStartZoom = camera.zoom || 1;
-      touchMoved = true;
-    } else {
-      touchMoved = false;
+    touchState.pointers.set(event.pointerId, { x, y, startX: x, startY: y });
+    if (touchState.pointers.size >= 2) {
+      touchState.moved = true;
     }
     return;
   }
   if (event.button === 2) {
-    isRotating = true;
-    lastPointer = { x, y };
     return;
   }
   if (state === "title") {
@@ -523,53 +531,19 @@ function onPointerDown(event) {
 function onPointerMove(event) {
   const { x, y } = getPointer(event);
   if (event.pointerType === "touch") {
-    const pointerState = pointerStates.get(event.pointerId);
+    const pointerState = touchState.pointers.get(event.pointerId);
     if (!pointerState) return;
     pointerState.x = x;
     pointerState.y = y;
-    if (pointerStates.size === 2) {
-      const points = Array.from(pointerStates.values());
-      const dist = getPointerDistance(points[0], points[1]);
-      if (pinchStartDist > 0) {
-        const nextZoom = clamp(
-          pinchStartZoom * (dist / pinchStartDist),
-          cameraControls.zoomMin,
-          cameraControls.zoomMax
-        );
-        camera.zoom = nextZoom;
-        camera.updateProjectionMatrix();
-      }
-      touchMoved = true;
+    if (touchState.pointers.size >= 2) {
+      touchState.moved = true;
       return;
     }
-    if (state !== "game" || busy) return;
     const dxTotal = x - pointerState.startX;
     const dyTotal = y - pointerState.startY;
-    const movedEnough =
-      Math.abs(dxTotal) > cameraControls.touchRotateThreshold ||
-      Math.abs(dyTotal) > cameraControls.touchRotateThreshold;
-    if (movedEnough) {
-      if (!isTouchRotating) {
-        isTouchRotating = true;
-        lastPointer = { x, y };
-      }
-      const dx = x - lastPointer.x;
-      const dy = y - lastPointer.y;
-      boardGroup.rotation.y += dx * cameraControls.rotateSpeed;
-      boardGroup.rotation.x += dy * cameraControls.rotateSpeed;
-      boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
-      lastPointer = { x, y };
-      touchMoved = true;
+    if (Math.abs(dxTotal) > 8 || Math.abs(dyTotal) > 8) {
+      touchState.moved = true;
     }
-    return;
-  }
-  if (isRotating) {
-    const dx = x - lastPointer.x;
-    const dy = y - lastPointer.y;
-    boardGroup.rotation.y += dx * cameraControls.rotateSpeed;
-    boardGroup.rotation.x += dy * cameraControls.rotateSpeed;
-    boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
-    lastPointer = { x, y };
     return;
   }
   if (state !== "game" || busy) return;
@@ -578,12 +552,9 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (event.pointerType === "touch") {
-    pointerStates.delete(event.pointerId);
-    if (pointerStates.size < 2) {
-      pinchStartDist = 0;
-    }
-    if (pointerStates.size === 0) {
-      if (!touchMoved) {
+    touchState.pointers.delete(event.pointerId);
+    if (touchState.pointers.size === 0) {
+      if (!touchState.moved) {
         const { x, y } = getPointer(event);
         if (state === "title") {
           if (hitButton("modeEasy", x, y)) return;
@@ -607,13 +578,12 @@ function onPointerUp(event) {
           }
         }
       }
-      isTouchRotating = false;
-      touchMoved = false;
+      touchState.moved = false;
     }
     return;
   }
   if (event.button === 2) {
-    isRotating = false;
+    return;
   }
 }
 
@@ -654,6 +624,7 @@ function updateScreenVisibility() {
   ui.end.visible = state === "end";
   boardGroup.visible = state === "game";
   ui.hud.visible = state === "game";
+  if (controls) controls.enabled = state === "game";
   if (ui.tip) ui.tip.mesh.visible = state === "game";
   if (ui.combo) ui.combo.mesh.visible = state === "game" && ui.combo.mesh.visible;
 }
@@ -675,10 +646,11 @@ function buildHud() {
 }
 
 function layoutHud() {
-  const cardWidth = 120;
-  const cardHeight = 60;
-  const padding = 20;
-  const gap = 14;
+  const compact = width < 420;
+  const cardWidth = compact ? 92 : 120;
+  const cardHeight = compact ? 52 : 60;
+  const padding = compact ? 12 : 20;
+  const gap = compact ? 8 : 14;
   const startX = padding;
   const y = 20;
 
@@ -695,9 +667,11 @@ function layoutHud() {
     card.value.setPosition(x + 12, y + 30);
   });
 
-  const buttonW = 110;
-  const buttonH = 44;
-  const homeX = Math.max(startX + cards.length * (cardWidth + gap) + gap, width - padding - buttonW);
+  const buttonW = compact ? 96 : 110;
+  const buttonH = compact ? 40 : 44;
+  const homeRight = width - padding - buttonW;
+  const homeLeft = startX + cards.length * (cardWidth + gap) + gap;
+  const homeX = clamp(homeLeft, padding, Math.max(padding, homeRight));
   const homeY = y + (cardHeight - buttonH) / 2;
   const btnRect = setRect(ui.hud.userData.homeBtn.bg, homeX, homeY, buttonW, buttonH, 2);
   ui.hud.userData.homeBtn.label.setCentered(homeX + buttonW / 2, homeY + buttonH / 2);
@@ -1314,12 +1288,6 @@ function setRect(mesh, x, y, w, h, z = 0) {
   mesh.scale.set(w, h, 1);
   mesh.position.set(x + w / 2, height - (y + h / 2), z);
   return { x, y, w, h };
-}
-
-function getPointerDistance(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.hypot(dx, dy);
 }
 
 function clamp(value, min, max) {
