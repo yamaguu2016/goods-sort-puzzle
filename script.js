@@ -145,6 +145,9 @@ function init() {
   renderer.domElement.addEventListener("pointerdown", onPointerDown);
   renderer.domElement.addEventListener("pointermove", onPointerMove);
   renderer.domElement.addEventListener("pointerup", onPointerUp);
+  renderer.domElement.addEventListener("wheel", onWheel, { passive: false, capture: true });
+  renderer.domElement.addEventListener("mousewheel", onWheel, { passive: false, capture: true });
+  window.addEventListener("wheel", onWheel, { passive: false, capture: true });
   renderer.domElement.addEventListener("contextmenu", (event) => {
     event.preventDefault();
   });
@@ -641,6 +644,17 @@ function onPointerUp(event) {
     isRotating = false;
     return;
   }
+}
+
+function onWheel(event) {
+  if (state !== "game" || !boardGroup) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const current = boardGroup.scale.x || 1;
+  const modeScale = event.deltaMode === 1 ? 3 : 1;
+  const delta = Math.sign(-event.deltaY) * 0.08 * modeScale;
+  const nextScale = clamp(current + delta, scaleLimits.min, scaleLimits.max);
+  boardGroup.scale.set(nextScale, nextScale, nextScale);
 }
 
 function getPointer(event) {
