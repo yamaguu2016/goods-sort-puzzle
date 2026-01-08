@@ -1,0 +1,26 @@
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #08060f;
+  user-select: none;
+}
+
+#three-root {
+  width: 100vw;
+  height: 100vh;
+}
+
+#three-root canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
