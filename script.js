@@ -48,6 +48,9 @@ let modeLabel = "Hard";
 let isRotating = false;
 let lastPointer = { x: 0, y: 0 };
 const rotateSpeed = 0.005;
+let pinchStartDist = 0;
+let pinchStartScale = 1;
+const scaleLimits = { min: 0.7, max: 1.8 };
 const touchState = {
   moved: false,
   pointers: new Map(),
@@ -93,7 +96,7 @@ function init() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.enablePan = false;
-  controls.enableZoom = true;
+  controls.enableZoom = false;
   controls.enableRotate = false;
   controls.rotateSpeed = 0.6;
   controls.zoomSpeed = 0.8;
@@ -506,6 +509,11 @@ function onPointerDown(event) {
     touchState.pointers.set(event.pointerId, { x, y, startX: x, startY: y });
     if (touchState.pointers.size >= 2) {
       touchState.moved = true;
+      if (touchState.pointers.size === 2) {
+        const points = Array.from(touchState.pointers.values());
+        pinchStartDist = getPointerDistance(points[0], points[1]);
+        pinchStartScale = boardGroup.scale.x || 1;
+      }
     }
     if (touchState.pointers.size === 1) {
       isRotating = true;
@@ -548,6 +556,16 @@ function onPointerMove(event) {
     pointerState.x = x;
     pointerState.y = y;
     if (touchState.pointers.size >= 2) {
+      const points = Array.from(touchState.pointers.values());
+      const dist = getPointerDistance(points[0], points[1]);
+      if (pinchStartDist > 0) {
+        const nextScale = clamp(
+          pinchStartScale * (dist / pinchStartDist),
+          scaleLimits.min,
+          scaleLimits.max
+        );
+        boardGroup.scale.set(nextScale, nextScale, nextScale);
+      }
       touchState.moved = true;
       isRotating = false;
       return;
@@ -611,6 +629,7 @@ function onPointerUp(event) {
       }
       touchState.moved = false;
       isRotating = false;
+      pinchStartDist = 0;
     }
     return;
   }
@@ -1321,6 +1340,12 @@ function setRect(mesh, x, y, w, h, z = 0) {
   mesh.scale.set(w, h, 1);
   mesh.position.set(x + w / 2, height - (y + h / 2), z);
   return { x, y, w, h };
+}
+
+function getPointerDistance(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.hypot(dx, dy);
 }
 
 function clamp(value, min, max) {
