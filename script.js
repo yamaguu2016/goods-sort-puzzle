@@ -44,6 +44,17 @@ let hoverId = null;
 let isRotating = false;
 let lastPointer = { x: 0, y: 0 };
 let modeLabel = "Hard";
+let touchMoved = false;
+let isTouchRotating = false;
+let pinchStartDist = 0;
+let pinchStartZoom = 1;
+const pointerStates = new Map();
+const cameraControls = {
+  rotateSpeed: 0.005,
+  touchRotateThreshold: 8,
+  zoomMin: 0.7,
+  zoomMax: 1.8,
+};
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -79,6 +90,7 @@ function init() {
 
   scene = new THREE.Scene();
   camera = new THREE.OrthographicCamera(0, 1, 1, 0, -500, 500);
+  camera.zoom = 1;
   scene.add(camera);
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.95);
@@ -469,6 +481,18 @@ function shuffleArray(list) {
 
 function onPointerDown(event) {
   const { x, y } = getPointer(event);
+  if (event.pointerType === "touch") {
+    pointerStates.set(event.pointerId, { x, y, startX: x, startY: y });
+    if (pointerStates.size === 2) {
+      const points = Array.from(pointerStates.values());
+      pinchStartDist = getPointerDistance(points[0], points[1]);
+      pinchStartZoom = camera.zoom || 1;
+      touchMoved = true;
+    } else {
+      touchMoved = false;
+    }
+    return;
+  }
   if (event.button === 2) {
     isRotating = true;
     lastPointer = { x, y };
@@ -498,11 +522,52 @@ function onPointerDown(event) {
 
 function onPointerMove(event) {
   const { x, y } = getPointer(event);
+  if (event.pointerType === "touch") {
+    const pointerState = pointerStates.get(event.pointerId);
+    if (!pointerState) return;
+    pointerState.x = x;
+    pointerState.y = y;
+    if (pointerStates.size === 2) {
+      const points = Array.from(pointerStates.values());
+      const dist = getPointerDistance(points[0], points[1]);
+      if (pinchStartDist > 0) {
+        const nextZoom = clamp(
+          pinchStartZoom * (dist / pinchStartDist),
+          cameraControls.zoomMin,
+          cameraControls.zoomMax
+        );
+        camera.zoom = nextZoom;
+        camera.updateProjectionMatrix();
+      }
+      touchMoved = true;
+      return;
+    }
+    if (state !== "game" || busy) return;
+    const dxTotal = x - pointerState.startX;
+    const dyTotal = y - pointerState.startY;
+    const movedEnough =
+      Math.abs(dxTotal) > cameraControls.touchRotateThreshold ||
+      Math.abs(dyTotal) > cameraControls.touchRotateThreshold;
+    if (movedEnough) {
+      if (!isTouchRotating) {
+        isTouchRotating = true;
+        lastPointer = { x, y };
+      }
+      const dx = x - lastPointer.x;
+      const dy = y - lastPointer.y;
+      boardGroup.rotation.y += dx * cameraControls.rotateSpeed;
+      boardGroup.rotation.x += dy * cameraControls.rotateSpeed;
+      boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
+      lastPointer = { x, y };
+      touchMoved = true;
+    }
+    return;
+  }
   if (isRotating) {
     const dx = x - lastPointer.x;
     const dy = y - lastPointer.y;
-    boardGroup.rotation.y += dx * 0.005;
-    boardGroup.rotation.x += dy * 0.005;
+    boardGroup.rotation.y += dx * cameraControls.rotateSpeed;
+    boardGroup.rotation.x += dy * cameraControls.rotateSpeed;
     boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
     lastPointer = { x, y };
     return;
@@ -512,6 +577,41 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  if (event.pointerType === "touch") {
+    pointerStates.delete(event.pointerId);
+    if (pointerStates.size < 2) {
+      pinchStartDist = 0;
+    }
+    if (pointerStates.size === 0) {
+      if (!touchMoved) {
+        const { x, y } = getPointer(event);
+        if (state === "title") {
+          if (hitButton("modeEasy", x, y)) return;
+          if (hitButton("modeNormal", x, y)) return;
+          if (hitButton("modeHard", x, y)) return;
+          if (hitButton("titleStart", x, y)) return;
+        }
+        if (state === "tutorial") {
+          if (hitButton("tutorialPlay", x, y)) return;
+        }
+        if (state === "end") {
+          if (hitButton("retry", x, y)) return;
+        }
+        if (state === "game") {
+          if (hitButton("home", x, y)) return;
+        }
+        if (state === "game" && !busy) {
+          const id = pickTile(event);
+          if (id) {
+            handleSelection(id);
+          }
+        }
+      }
+      isTouchRotating = false;
+      touchMoved = false;
+    }
+    return;
+  }
   if (event.button === 2) {
     isRotating = false;
   }
@@ -1214,4 +1314,14 @@ function setRect(mesh, x, y, w, h, z = 0) {
   mesh.scale.set(w, h, 1);
   mesh.position.set(x + w / 2, height - (y + h / 2), z);
   return { x, y, w, h };
+}
+
+function getPointerDistance(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.hypot(dx, dy);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
