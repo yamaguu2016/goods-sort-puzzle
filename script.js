@@ -51,6 +51,9 @@ const rotateSpeed = 0.005;
 let pinchStartDist = 0;
 let pinchStartScale = 1;
 const scaleLimits = { min: 0.7, max: 1.8 };
+let timerStart = 0;
+let elapsedMs = 0;
+let lastTimerText = "";
 const touchState = {
   moved: false,
   pointers: new Map(),
@@ -453,6 +456,7 @@ function tick(now) {
   updateTilesVisuals();
   updateTitleButtonPulse(now);
   updateScreenVisibility();
+  updateTimer(now);
   if (controls) controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
@@ -683,7 +687,7 @@ function updateScreenVisibility() {
 
 function buildHud() {
   const scoreCard = createHudCard("スコア", "0");
-  const timeCard = createHudCard("時間", "--");
+  const timeCard = createHudCard("時間", "00:00");
   const targetCard = createHudCard("目標", "--");
   const homeBtn = createButton("ホーム");
   homeBtn.bg.material.color.set("#ffffff");
@@ -733,6 +737,24 @@ function layoutHud() {
 function updateScore() {
   ui.hud.userData.scoreCard.value.update(String(score));
   layoutHud();
+}
+
+function updateTimer(now) {
+  if (state !== "game" || timerStart === 0) return;
+  elapsedMs = now - timerStart;
+  const text = formatElapsed(elapsedMs);
+  if (text !== lastTimerText) {
+    ui.hud.userData.timeCard.value.update(text);
+    layoutHud();
+    lastTimerText = text;
+  }
+}
+
+function formatElapsed(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function createHudCard(label, value) {
@@ -1034,7 +1056,8 @@ function buildTip() {
 
 function layoutTip() {
   if (!ui.tip) return;
-  const inset = width < 420 ? 64 : 40;
+  const compact = width < 420;
+  const inset = compact ? Math.min(height * 0.18, 120) : 40;
   ui.tip.setCentered(width / 2, height - inset);
 }
 
@@ -1080,6 +1103,10 @@ function startGame() {
   selectedIds = [];
   hoverId = null;
   busy = false;
+  timerStart = performance.now();
+  elapsedMs = 0;
+  lastTimerText = "";
+  ui.hud.userData.timeCard.value.update("00:00");
   updateScore();
   createBoard();
   syncTiles();
@@ -1091,6 +1118,9 @@ function goHome() {
   busy = false;
   selectedIds = [];
   hoverId = null;
+  timerStart = 0;
+  elapsedMs = 0;
+  lastTimerText = "";
   if (ui.combo) ui.combo.mesh.visible = false;
   layout();
 }
