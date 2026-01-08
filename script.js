@@ -1,3 +1,5 @@
+const THREE = window.THREE;
+const OrbitControls = window.OrbitControls;
 let cubeSize = 9;
 const selectionGoal = 3;
 const tileTypes = ["apple", "orange", "grape", "banana", "cherry", "lemon"];
@@ -43,6 +45,9 @@ const animations = [];
 let selectedIds = [];
 let hoverId = null;
 let modeLabel = "Hard";
+let isRotating = false;
+let lastPointer = { x: 0, y: 0 };
+const rotateSpeed = 0.005;
 const touchState = {
   moved: false,
   pointers: new Map(),
@@ -85,10 +90,11 @@ function init() {
   camera = new THREE.OrthographicCamera(0, 1, 1, 0, -500, 500);
   camera.zoom = 1;
   scene.add(camera);
-  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.enablePan = false;
   controls.enableZoom = true;
+  controls.enableRotate = false;
   controls.rotateSpeed = 0.6;
   controls.zoomSpeed = 0.8;
   controls.minZoom = 0.7;
@@ -99,7 +105,7 @@ function init() {
     RIGHT: THREE.MOUSE.ROTATE,
   };
   controls.touches = {
-    ONE: THREE.TOUCH.PAN,
+    ONE: THREE.TOUCH.ROTATE,
     TWO: THREE.TOUCH.DOLLY_ROTATE,
   };
 
@@ -501,9 +507,15 @@ function onPointerDown(event) {
     if (touchState.pointers.size >= 2) {
       touchState.moved = true;
     }
+    if (touchState.pointers.size === 1) {
+      isRotating = true;
+      lastPointer = { x, y };
+    }
     return;
   }
   if (event.button === 2) {
+    isRotating = true;
+    lastPointer = { x, y };
     return;
   }
   if (state === "title") {
@@ -537,6 +549,7 @@ function onPointerMove(event) {
     pointerState.y = y;
     if (touchState.pointers.size >= 2) {
       touchState.moved = true;
+      isRotating = false;
       return;
     }
     const dxTotal = x - pointerState.startX;
@@ -544,6 +557,24 @@ function onPointerMove(event) {
     if (Math.abs(dxTotal) > 8 || Math.abs(dyTotal) > 8) {
       touchState.moved = true;
     }
+    if (isRotating) {
+      const dx = x - lastPointer.x;
+      const dy = y - lastPointer.y;
+      boardGroup.rotation.y += dx * rotateSpeed;
+      boardGroup.rotation.x += dy * rotateSpeed;
+      boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
+      lastPointer = { x, y };
+      touchState.moved = true;
+    }
+    return;
+  }
+  if (isRotating) {
+    const dx = x - lastPointer.x;
+    const dy = y - lastPointer.y;
+    boardGroup.rotation.y += dx * rotateSpeed;
+    boardGroup.rotation.x += dy * rotateSpeed;
+    boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
+    lastPointer = { x, y };
     return;
   }
   if (state !== "game" || busy) return;
@@ -579,10 +610,12 @@ function onPointerUp(event) {
         }
       }
       touchState.moved = false;
+      isRotating = false;
     }
     return;
   }
   if (event.button === 2) {
+    isRotating = false;
     return;
   }
 }
