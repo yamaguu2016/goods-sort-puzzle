@@ -1034,7 +1034,8 @@ function buildTip() {
 
 function layoutTip() {
   if (!ui.tip) return;
-  ui.tip.setCentered(width / 2, height - 40);
+  const inset = width < 420 ? 64 : 40;
+  ui.tip.setCentered(width / 2, height - inset);
 }
 
 function buildCombo() {
