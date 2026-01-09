@@ -51,6 +51,14 @@ const rotateSpeed = 0.005;
 let pinchStartDist = 0;
 let pinchStartScale = 1;
 const scaleLimits = { min: 0.7, max: 1.8 };
+const rotationAxes = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+};
+const rotationQuats = {
+  x: new THREE.Quaternion(),
+  y: new THREE.Quaternion(),
+};
 let timerStart = 0;
 let elapsedMs = 0;
 let lastTimerText = "";
@@ -179,7 +187,7 @@ function layout() {
   boardLayout.step = boardLayout.cell + boardLayout.gap;
 
   boardGroup.position.set(width / 2, height / 2 + 10, 0);
-  boardGroup.rotation.set(-0.6, 0.6, 0.08);
+  applyRotation();
   boardFrame.scale.set(boardLayout.extent, boardLayout.extent, boardLayout.extent);
   camera.position.set(0, 0, boardLayout.extent * 1.4);
   camera.lookAt(0, 0, 0);
@@ -585,9 +593,7 @@ function onPointerMove(event) {
     if (isRotating) {
       const dx = x - lastPointer.x;
       const dy = y - lastPointer.y;
-      boardGroup.rotation.y += dx * rotateSpeed;
-      boardGroup.rotation.x += dy * rotateSpeed;
-      boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
+      applyRotationDelta(dx, dy);
       lastPointer = { x, y };
       touchState.moved = true;
     }
@@ -596,9 +602,7 @@ function onPointerMove(event) {
   if (isRotating) {
     const dx = x - lastPointer.x;
     const dy = y - lastPointer.y;
-    boardGroup.rotation.y += dx * rotateSpeed;
-    boardGroup.rotation.x += dy * rotateSpeed;
-    boardGroup.rotation.x = Math.max(-1.2, Math.min(0.2, boardGroup.rotation.x));
+    applyRotationDelta(dx, dy);
     lastPointer = { x, y };
     return;
   }
@@ -1385,6 +1389,20 @@ function setRect(mesh, x, y, w, h, z = 0) {
   mesh.scale.set(w, h, 1);
   mesh.position.set(x + w / 2, height - (y + h / 2), z);
   return { x, y, w, h };
+}
+
+function applyRotationDelta(dx, dy) {
+  if (!boardGroup) return;
+  rotationQuats.y.setFromAxisAngle(rotationAxes.y, dx * rotateSpeed);
+  rotationQuats.x.setFromAxisAngle(rotationAxes.x, dy * rotateSpeed);
+  boardGroup.quaternion.premultiply(rotationQuats.y);
+  boardGroup.quaternion.premultiply(rotationQuats.x);
+}
+
+function applyRotation() {
+  if (!boardGroup) return;
+  const euler = new THREE.Euler(-0.6, 0.6, 0.08, "YXZ");
+  boardGroup.quaternion.setFromEuler(euler);
 }
 
 function getPointerDistance(a, b) {
