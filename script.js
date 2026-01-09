@@ -2,6 +2,24 @@ const THREE = window.THREE;
 const OrbitControls = window.OrbitControls;
 let cubeSize = 9;
 const selectionGoal = 3;
+const rankingSize = 10;
+const theme = {
+  bgGradient: ["#f2f2f2", "#fafafa", "#eaeaea"],
+  panel: "#fff8ee",
+  panelStroke: "rgba(120,90,40,0.12)",
+  panelShadow: "rgba(60,40,10,0.12)",
+  textDark: "#1a1a1a",
+  textMid: "#4d4d4d",
+  textLight: "#ffffff",
+  accent: "#e60012",
+  accentStrong: "#e60012",
+  gold: "#d9b36c",
+  goldLight: "#f4e6c4",
+  hudCard: "#fff3df",
+  button: "#f0f0f0",
+  buttonText: "#1a1a1a",
+  activeStroke: "rgba(230,0,18,0.75)",
+};
 const tileTypes = ["apple", "orange", "grape", "banana", "cherry", "lemon"];
 const tileEmoji = {
   apple: "\uD83C\uDF4E",
@@ -12,12 +30,12 @@ const tileEmoji = {
   lemon: "\uD83C\uDF4B",
 };
 const tileColors = {
-  apple: "#ff7ad9",
-  orange: "#ff9f4f",
-  grape: "#7a6bff",
-  banana: "#ffd36b",
-  cherry: "#ff6b8b",
-  lemon: "#00d6ff",
+  apple: "#ff6b8b",
+  orange: "#ff9a4a",
+  grape: "#6a6cff",
+  banana: "#ffd25c",
+  cherry: "#ff5678",
+  lemon: "#20c6ff",
 };
 
 const root = document.getElementById("three-root");
@@ -62,6 +80,19 @@ const rotationQuats = {
 let timerStart = 0;
 let elapsedMs = 0;
 let lastTimerText = "";
+let bestTimeMs = null;
+const bestTimeKey = "goodsSortPuzzleBestTimeMs";
+const playerNameKey = "goodsSortPuzzlePlayerName";
+const rankingKey = "goodsSortPuzzleRanking";
+let playerName = "PLAYER";
+let ranking = [];
+let needsNameInput = false;
+let settingsReturnState = "title";
+let lastState = null;
+let titleIntroStart = 0;
+let titleSweepStart = 0;
+let currentModeSize = cubeSize;
+let tutorialAnimStart = 0;
 const touchState = {
   moved: false,
   pointers: new Map(),
@@ -76,6 +107,7 @@ const ui = {
   title: new THREE.Group(),
   tutorial: new THREE.Group(),
   end: new THREE.Group(),
+  settings: new THREE.Group(),
   combo: null,
   tip: null,
   buttons: {},
@@ -140,14 +172,19 @@ function init() {
   buildTitleScreen();
   buildTutorialScreen();
   buildEndScreen();
+  buildSettingsScreen();
   buildTip();
   buildCombo();
 
-  scene.add(ui.hud, ui.title, ui.tutorial, ui.end);
+  scene.add(ui.hud, ui.title, ui.tutorial, ui.end, ui.settings);
 
+  loadBestTime();
+  loadPlayerName();
+  loadRanking();
   createBoard();
   syncTiles();
   layout();
+  updateRankingDisplay();
 
   window.addEventListener("resize", layout);
   renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -200,6 +237,7 @@ function layout() {
   layoutTitleScreen();
   layoutTutorialScreen();
   layoutEndScreen();
+  layoutSettingsScreen();
   layoutTip();
   layoutCombo();
   layoutTiles();
@@ -465,6 +503,19 @@ function updateTilesVisuals() {
 function tick(now) {
   updateAnimations(now);
   updateTilesVisuals();
+  if (state !== lastState) {
+    if (state === "title") {
+      titleIntroStart = performance.now();
+      titleSweepStart = performance.now();
+    }
+    if (state === "tutorial") {
+      tutorialAnimStart = performance.now();
+    }
+    lastState = state;
+  }
+  updateTitleEntrance(now);
+  updateTitleHeaderSweep(now);
+  updateTutorialAnimation(now);
   updateTitleButtonPulse(now);
   updateScreenVisibility();
   updateTimer(now);
@@ -483,6 +534,133 @@ function updateTitleButtonPulse(now) {
     ui.title.userData.btn.label.mesh.userData.size.w * pulse,
     ui.title.userData.btn.label.mesh.userData.size.h * pulse,
     1
+  );
+}
+
+function updateTitleEntrance(now) {
+  if (state !== "title" || !ui.title.userData || !ui.title.userData.animateItems) return;
+  const t = (now - titleIntroStart) / 1000;
+  const items = ui.title.userData.animateItems;
+  items.forEach((item, idx) => {
+    const delay = idx * 0.05;
+    const local = clamp((t - delay) / 0.6, 0, 1);
+    const eased = easeOutCubic(local);
+    const yOffset = (1 - eased) * 18;
+    item.mesh.position.set(item.basePos.x, item.basePos.y - yOffset, item.basePos.z);
+    const scale = item.baseScale.clone().multiplyScalar(0.98 + 0.02 * eased);
+    item.mesh.scale.copy(scale);
+    setMeshOpacity(item.mesh, eased);
+  });
+}
+
+function updateTitleHeaderSweep(now) {
+  if (state !== "title" || !ui.title.userData || !ui.title.userData.headerGlow) return;
+  const glow = ui.title.userData.headerGlow;
+  const header = ui.title.userData.header;
+  if (!header) return;
+  const duration = 2400;
+  const t = ((now - titleSweepStart) % duration) / duration;
+  const headerW = header.scale.x;
+  const startX = header.position.x - headerW / 2 - 120;
+  const endX = header.position.x + headerW / 2 + 120;
+  glow.position.x = startX + (endX - startX) * t;
+  glow.position.y = header.position.y;
+  glow.position.z = header.position.z + 1;
+  const alpha = t < 0.5 ? t * 2 : (1 - t) * 2;
+  glow.material.opacity = 0.35 * alpha;
+}
+
+function setModeOutlineImmediate() {
+  if (!ui.title.userData) return;
+  const targets = [
+    { size: 3, outline: ui.title.userData.easyBtn?.outline },
+    { size: 6, outline: ui.title.userData.normalBtn?.outline },
+    { size: 9, outline: ui.title.userData.hardBtn?.outline },
+  ];
+  targets.forEach((target) => {
+    if (!target.outline) return;
+    target.outline.material.opacity = cubeSize === target.size ? 1 : 0;
+  });
+}
+
+function updateTutorialAnimation(now) {
+  if (state !== "tutorial" || !ui.tutorial.userData) return;
+  const { cubeIcon, handIcon } = ui.tutorial.userData;
+  if (!cubeIcon || !handIcon || !ui.tutorial.userData.iconBase) return;
+  const { cubePos, handPos, cubeScale, handScale } = ui.tutorial.userData.iconBase;
+  const elapsed = (now - tutorialAnimStart) / 1000;
+  const cycle = 2.4;
+  const t = (elapsed % cycle) / cycle;
+  let moveT = clamp(t / 0.55, 0, 1);
+  let tapT = clamp((t - 0.55) / 0.2, 0, 1);
+  let releaseT = clamp((t - 0.75) / 0.2, 0, 1);
+  const easedMove = easeOutCubic(moveT);
+  const tapScale = 1 - 0.12 * Math.sin(Math.PI * tapT);
+  handIcon.mesh.position.set(
+    handPos.x - 18 + 18 * easedMove,
+    handPos.y + 12 - 12 * easedMove,
+    handPos.z
+  );
+  handIcon.mesh.scale.set(
+    handScale.x * tapScale,
+    handScale.y * tapScale,
+    1
+  );
+  const cubePulse = 1 + 0.08 * Math.sin(Math.PI * tapT);
+  cubeIcon.mesh.scale.set(
+    cubeScale.x * cubePulse,
+    cubeScale.y * cubePulse,
+    1
+  );
+  if (releaseT > 0) {
+    const easedRelease = easeInOut(releaseT);
+    handIcon.mesh.position.set(
+      handPos.x,
+      handPos.y,
+      handPos.z
+    );
+    handIcon.mesh.scale.set(
+      handScale.x * (1 + 0.02 * (1 - easedRelease)),
+      handScale.y * (1 + 0.02 * (1 - easedRelease)),
+      1
+    );
+    cubeIcon.mesh.scale.set(
+      cubeScale.x * (1 + 0.02 * (1 - easedRelease)),
+      cubeScale.y * (1 + 0.02 * (1 - easedRelease)),
+      1
+    );
+  }
+}
+
+function animateModeOutline(nextSize) {
+  if (!ui.title.userData) return;
+  const outlines = {
+    3: ui.title.userData.easyBtn?.outline,
+    6: ui.title.userData.normalBtn?.outline,
+    9: ui.title.userData.hardBtn?.outline,
+  };
+  const prevSize = currentModeSize;
+  currentModeSize = nextSize;
+  const prevOutline = outlines[prevSize];
+  const nextOutline = outlines[nextSize];
+  if (!prevOutline && !nextOutline) return;
+  if (prevOutline === nextOutline) {
+    if (nextOutline) nextOutline.material.opacity = 1;
+    return;
+  }
+  const prevStart = prevOutline ? prevOutline.material.opacity : 0;
+  const nextStart = nextOutline ? nextOutline.material.opacity : 0;
+  addAnimation(
+    220,
+    (t) => {
+      const eased = easeInOut(t);
+      if (prevOutline) prevOutline.material.opacity = prevStart + (0 - prevStart) * eased;
+      if (nextOutline) nextOutline.material.opacity = nextStart + (1 - nextStart) * eased;
+    },
+    () => {
+      if (prevOutline) prevOutline.material.opacity = 0;
+      if (nextOutline) nextOutline.material.opacity = 1;
+    }
   );
 }
 
@@ -509,6 +687,52 @@ function addAnimation(duration, update, complete) {
 
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function setMeshOpacity(mesh, value) {
+  if (!mesh) return;
+  if (mesh.material) {
+    if (Array.isArray(mesh.material)) {
+      mesh.material.forEach((material) => {
+        material.transparent = true;
+        material.opacity = value;
+      });
+    } else {
+      mesh.material.transparent = true;
+      mesh.material.opacity = value;
+    }
+  }
+  if (mesh.children && mesh.children.length) {
+    mesh.children.forEach((child) => setMeshOpacity(child, value));
+  }
+}
+
+function captureTitleAnimation() {
+  if (!ui.title.userData) return;
+  const items = [
+    ui.title.userData.titleShadow?.mesh,
+    ui.title.userData.title?.mesh,
+    ui.title.userData.modeBadgeBg,
+    ui.title.userData.modeBadgeText?.mesh,
+    ui.title.userData.hyperBadgeBg,
+    ui.title.userData.hyperBadgeText?.mesh,
+    ui.title.userData.goldLine,
+    ui.title.userData.sub?.mesh,
+    ui.title.userData.easyBtn?.group,
+    ui.title.userData.normalBtn?.group,
+    ui.title.userData.hardBtn?.group,
+    ui.title.userData.btn?.group,
+    ui.title.userData.settingsBtn?.group,
+  ].filter(Boolean);
+  ui.title.userData.animateItems = items.map((mesh) => ({
+    mesh,
+    basePos: mesh.position.clone(),
+    baseScale: mesh.scale.clone(),
+  }));
 }
 
 function shuffleArray(list) {
@@ -545,6 +769,7 @@ function onPointerDown(event) {
     if (hitButton("modeEasy", x, y)) return;
     if (hitButton("modeNormal", x, y)) return;
     if (hitButton("modeHard", x, y)) return;
+    if (hitButton("titleSettings", x, y)) return;
     if (hitButton("titleStart", x, y)) return;
   }
   if (state === "tutorial") {
@@ -553,8 +778,13 @@ function onPointerDown(event) {
   if (state === "end") {
     if (hitButton("retry", x, y)) return;
   }
+  if (state === "settings") {
+    if (hitButton("settingsName", x, y)) return;
+    if (hitButton("settingsBack", x, y)) return;
+  }
   if (state === "game") {
     if (hitButton("home", x, y)) return;
+    if (hitButton("settingsHud", x, y)) return;
   }
   if (state !== "game" || busy) return;
   const id = pickTile(event);
@@ -620,6 +850,7 @@ function onPointerUp(event) {
           if (hitButton("modeEasy", x, y)) return;
           if (hitButton("modeNormal", x, y)) return;
           if (hitButton("modeHard", x, y)) return;
+          if (hitButton("titleSettings", x, y)) return;
           if (hitButton("titleStart", x, y)) return;
         }
         if (state === "tutorial") {
@@ -628,8 +859,13 @@ function onPointerUp(event) {
         if (state === "end") {
           if (hitButton("retry", x, y)) return;
         }
+        if (state === "settings") {
+          if (hitButton("settingsName", x, y)) return;
+          if (hitButton("settingsBack", x, y)) return;
+        }
         if (state === "game") {
           if (hitButton("home", x, y)) return;
+          if (hitButton("settingsHud", x, y)) return;
         }
         if (state === "game" && !busy) {
           const id = pickTile(event);
@@ -696,6 +932,7 @@ function updateScreenVisibility() {
   ui.title.visible = state === "title";
   ui.tutorial.visible = state === "tutorial";
   ui.end.visible = state === "end";
+  ui.settings.visible = state === "settings";
   boardGroup.visible = state === "game";
   ui.hud.visible = state === "game";
   if (controls) controls.enabled = state === "game";
@@ -706,15 +943,37 @@ function updateScreenVisibility() {
 function buildHud() {
   const scoreCard = createHudCard("スコア", "0");
   const timeCard = createHudCard("時間", "00:00");
-  const targetCard = createHudCard("目標", "--");
-  const homeBtn = createButton("ホーム");
-  homeBtn.bg.material.color.set("#ffffff");
-  ui.hud.add(scoreCard.group, timeCard.group, targetCard.group, homeBtn.group);
-  ui.hud.userData = { scoreCard, timeCard, targetCard, homeBtn };
+  const targetCard = createHudCard("最速", "--");
+  const homeBtn = createButton("ホーム", {
+    bgColor: "#e7c889",
+    textColor: "#2b1b00",
+    radius: 24,
+    style: "button",
+  });
+  const settingsBtn = createButton("設定", {
+    bgColor: "#e7c889",
+    textColor: "#2b1b00",
+    radius: 24,
+    style: "button",
+  });
+  ui.hud.add(
+    scoreCard.group,
+    timeCard.group,
+    targetCard.group,
+    settingsBtn.group,
+    homeBtn.group
+  );
+  ui.hud.userData = { scoreCard, timeCard, targetCard, homeBtn, settingsBtn };
   ui.buttons.home = {
     rect: { x: 0, y: 0, w: 0, h: 0 },
     onClick: () => {
       goHome();
+    },
+  };
+  ui.buttons.settingsHud = {
+    rect: { x: 0, y: 0, w: 0, h: 0 },
+    onClick: () => {
+      openSettings("game");
     },
   };
 }
@@ -722,7 +981,7 @@ function buildHud() {
 function layoutHud() {
   const compact = width < 420;
   const cardWidth = compact ? 92 : 120;
-  const cardHeight = compact ? 52 : 60;
+  const cardHeight = compact ? 58 : 68;
   const padding = compact ? 12 : 20;
   const gap = compact ? 8 : 14;
   const startX = padding;
@@ -737,24 +996,165 @@ function layoutHud() {
   cards.forEach((card, idx) => {
     const x = startX + idx * (cardWidth + gap);
     setRect(card.bg, x, y, cardWidth, cardHeight, 2);
-    card.label.setPosition(x + 12, y + 10);
-    card.value.setPosition(x + 12, y + 30);
+    card.label.setPosition(x + 12, y + 8);
+    card.value.setPosition(x + 12, y + 32);
   });
 
   const buttonW = compact ? 96 : 110;
   const buttonH = compact ? 40 : 44;
-  const homeRight = width - padding - buttonW;
-  const homeLeft = startX + cards.length * (cardWidth + gap) + gap;
-  const homeX = clamp(homeLeft, padding, Math.max(padding, homeRight));
+  const buttonGap = compact ? 8 : 10;
+  const buttonsTotal = buttonW * 2 + buttonGap;
+  const buttonsLeft = width - padding - buttonsTotal;
+  const minLeft = startX + cards.length * (cardWidth + gap) + gap;
+  const startButtonsX = clamp(buttonsLeft, padding, Math.max(padding, minLeft));
   const homeY = y + (cardHeight - buttonH) / 2;
-  const btnRect = setRect(ui.hud.userData.homeBtn.bg, homeX, homeY, buttonW, buttonH, 2);
+  const settingsRect = setRect(
+    ui.hud.userData.settingsBtn.bg,
+    startButtonsX,
+    homeY,
+    buttonW,
+    buttonH,
+    2
+  );
+  ui.hud.userData.settingsBtn.label.setCentered(
+    startButtonsX + buttonW / 2,
+    homeY + buttonH / 2
+  );
+  const homeX = startButtonsX + buttonW + buttonGap;
+  const homeRect = setRect(ui.hud.userData.homeBtn.bg, homeX, homeY, buttonW, buttonH, 2);
   ui.hud.userData.homeBtn.label.setCentered(homeX + buttonW / 2, homeY + buttonH / 2);
-  ui.buttons.home.rect = btnRect;
+  ui.buttons.settingsHud.rect = settingsRect;
+  ui.buttons.home.rect = homeRect;
 }
 
 function updateScore() {
   ui.hud.userData.scoreCard.value.update(String(score));
   layoutHud();
+}
+
+function loadBestTime() {
+  try {
+    const stored = window.localStorage.getItem(bestTimeKey);
+    bestTimeMs = stored ? Number(stored) : null;
+  } catch {
+    bestTimeMs = null;
+  }
+  updateBestTimeDisplay();
+}
+
+function saveBestTime(ms) {
+  bestTimeMs = ms;
+  try {
+    window.localStorage.setItem(bestTimeKey, String(ms));
+  } catch {
+    // ignore storage errors
+  }
+  updateBestTimeDisplay();
+}
+
+function updateBestTimeDisplay() {
+  if (!ui.hud.userData) return;
+  const value = bestTimeMs ? formatElapsed(bestTimeMs) : "--";
+  ui.hud.userData.targetCard.value.update(value);
+  layoutHud();
+}
+
+function loadPlayerName() {
+  try {
+    const stored = window.localStorage.getItem(playerNameKey);
+    if (stored && stored.trim()) {
+      const normalized = normalizePlayerName(stored);
+      if (normalized) {
+        playerName = normalized;
+      } else {
+        needsNameInput = true;
+      }
+    } else {
+      needsNameInput = true;
+    }
+  } catch {
+    needsNameInput = true;
+  }
+}
+
+function savePlayerName(name) {
+  playerName = name;
+  try {
+    window.localStorage.setItem(playerNameKey, name);
+  } catch {
+    // ignore storage errors
+  }
+  updateSettingsNameDisplay();
+}
+
+function loadRanking() {
+  try {
+    const stored = window.localStorage.getItem(rankingKey);
+    ranking = stored ? JSON.parse(stored) : [];
+    if (!Array.isArray(ranking)) ranking = [];
+  } catch {
+    ranking = [];
+  }
+}
+
+function saveRanking() {
+  try {
+    window.localStorage.setItem(rankingKey, JSON.stringify(ranking));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function addRankingEntry(timeMs) {
+  ranking.push({ name: playerName, timeMs });
+  ranking.sort((a, b) => a.timeMs - b.timeMs);
+  ranking = ranking.slice(0, rankingSize);
+  saveRanking();
+  updateRankingDisplay();
+}
+
+function updateRankingDisplay() {
+  if (!ui.end.userData) return;
+  ui.end.userData.rankingLines.forEach((line, idx) => {
+    const entry = ranking[idx];
+    if (entry) {
+      line.update(`${idx + 1}. ${entry.name} ${formatElapsed(entry.timeMs)}`);
+    } else {
+      line.update(`${idx + 1}. ---`);
+    }
+  });
+  layoutEndScreen();
+}
+
+function containsEmoji(value) {
+  try {
+    const emojiRegex = new RegExp("\\p{Extended_Pictographic}", "u");
+    return emojiRegex.test(value);
+  } catch {
+    return /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(value);
+  }
+}
+
+function normalizePlayerName(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const length = Array.from(trimmed).length;
+  if (length < 1 || length > 10) return null;
+  if (containsEmoji(trimmed)) return null;
+  return trimmed;
+}
+
+function promptPlayerName({ allowCancel }) {
+  while (true) {
+    const input = window.prompt("プレイヤー名を入力 (1〜10文字)", playerName);
+    if (input === null) {
+      return allowCancel ? null : "PLAYER";
+    }
+    const normalized = normalizePlayerName(input);
+    if (normalized === "") return "PLAYER";
+    if (normalized) return normalized;
+    window.alert("1〜10文字（絵文字NG）で入力してください。");
+  }
 }
 
 function updateTimer(now) {
@@ -777,15 +1177,15 @@ function formatElapsed(ms) {
 
 function createHudCard(label, value) {
   const group = new THREE.Group();
-  const bg = createPanel("#ffffffff", 0.95);
+  const bg = createPanel(theme.hudCard, 0.95);
   const labelText = createTextSprite(label, {
-    fontSize: 18,
-    color: "#2b2233",
+    fontSize: 16,
+    color: theme.textMid,
     weight: "700",
   });
   const valueText = createTextSprite(value, {
-    fontSize: 26,
-    color: "#1a0f2e",
+    fontSize: 24,
+    color: theme.textDark,
     weight: "900",
   });
   group.add(bg, labelText.mesh, valueText.mesh);
@@ -793,45 +1193,122 @@ function createHudCard(label, value) {
 }
 
 function buildTitleScreen() {
-  const overlay = createPanel("#000000", 0.5);
-  const panel = createPanel("#ffffff", 0.96);
-  const title = createTextSprite(
-    "\u30B0\u30C3\u30BA\u30BD\u30FC\u30C8\u30D1\u30BA\u30EB 9x9x9",
-    {
-      fontSize: 26,
-      color: "#2b2233",
-      weight: "900",
-    }
+  const overlay = createPanel("#000000", 0.35);
+  const panel = createPanel(theme.panel, 0.98, 24, "panel");
+  const header = createPanel(theme.accent, 1, 24, "panel");
+  const headerGlow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      map: makeHeaderSweepTexture(),
+      transparent: true,
+      opacity: 0,
+    })
   );
+  const headerIconOuter = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 48),
+    new THREE.MeshBasicMaterial({ color: "#ffffff" })
+  );
+  const headerIconInner = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 48),
+    new THREE.MeshBasicMaterial({ color: theme.accent })
+  );
+  const titleShadow = createTextSprite("\u30B0\u30C3\u30BA\u30BD\u30FC\u30C8\u30D1\u30BA\u30EB", {
+    fontSize: 28,
+    color: "rgba(0,0,0,0.25)",
+    weight: "900",
+  });
+  const title = createTextSprite("\u30B0\u30C3\u30BA\u30BD\u30FC\u30C8\u30D1\u30BA\u30EB", {
+    fontSize: 28,
+    color: theme.textLight,
+    weight: "900",
+  });
+  const modeBadgeBg = createPanel(theme.textLight, 1, 16, "panel");
+  const modeBadgeText = createTextSprite("9x9x9", {
+    fontSize: 16,
+    color: theme.accent,
+    weight: "900",
+  });
+  const hyperBadgeBg = createPanel(theme.gold, 1, 16, "panel");
+  const hyperBadgeText = createTextSprite("HYPER CASUAL", {
+    fontSize: 14,
+    color: "#1a1a1a",
+    weight: "900",
+  });
+  const goldLine = createPanel(theme.goldLight, 1, 8, "flat");
   const sub = createTextSprite(
-    "\u540C\u3058\u30D5\u30EB\u30FC\u30C4\u30923\u3064\u9078\u3093\u3067\u6D88\u3059",
+    "\u30BF\u30C3\u30D7\u3057\u30663\u3064\u63C3\u3048\u308B\u3060\u3051",
     {
       fontSize: 18,
-      color: "#44405a",
+      color: theme.textMid,
       weight: "700",
     }
   );
-  const easyBtn = createButton("かんたん 3x3x3");
-  const normalBtn = createButton("ふつう 6x6x6");
-  const hardBtn = createButton("むずかしい 9x9x9");
-  const btn = createButton("スタート");
-  btn.bg.material.color.set("#76f28c");
+  const easyBtn = createButton("かんたん 3x3x3", {
+    bgColor: "#e7c889",
+    textColor: "#2b1b00",
+    radius: 26,
+    style: "button",
+  });
+  const normalBtn = createButton("ふつう 6x6x6", {
+    bgColor: "#e7c889",
+    textColor: "#2b1b00",
+    radius: 26,
+    style: "button",
+  });
+  const hardBtn = createButton("むずかしい 9x9x9", {
+    bgColor: "#e7c889",
+    textColor: "#2b1b00",
+    radius: 26,
+    style: "button",
+  });
+  const btn = createButton("スタート", {
+    bgColor: theme.accentStrong,
+    textColor: theme.textLight,
+    radius: 26,
+    style: "button",
+  });
+  const settingsBtn = createButton("設定", { radius: 24, style: "button" });
   ui.title.add(
     overlay,
     panel,
+    header,
+    headerGlow,
+    headerIconOuter,
+    headerIconInner,
+    titleShadow.mesh,
     title.mesh,
+    modeBadgeBg,
+    modeBadgeText.mesh,
+    hyperBadgeBg,
+    hyperBadgeText.mesh,
+    goldLine,
     sub.mesh,
     easyBtn.group,
+    easyBtn.outline,
     normalBtn.group,
+    normalBtn.outline,
     hardBtn.group,
-    btn.group
+    hardBtn.outline,
+    btn.group,
+    settingsBtn.group
   );
   ui.title.userData = {
     overlay,
     panel,
+    header,
+    headerGlow,
+    headerIconOuter,
+    headerIconInner,
+    titleShadow,
     title,
+    modeBadgeBg,
+    modeBadgeText,
+    hyperBadgeBg,
+    hyperBadgeText,
+    goldLine,
     sub,
     btn,
+    settingsBtn,
     easyBtn,
     normalBtn,
     hardBtn,
@@ -842,6 +1319,12 @@ function buildTitleScreen() {
     rect: { x: 0, y: 0, w: 0, h: 0 },
     onClick: () => {
       state = "tutorial";
+    },
+  };
+  ui.buttons.titleSettings = {
+    rect: { x: 0, y: 0, w: 0, h: 0 },
+    onClick: () => {
+      openSettings("title");
     },
   };
   ui.buttons.modeEasy = {
@@ -868,24 +1351,64 @@ function layoutTitleScreen() {
   const overlay = ui.title.userData.overlay;
   setRect(overlay, 0, 0, width, height, 50);
   const panelW = Math.min(560, width - 40);
-  const panelH = 320;
+  const panelH = 380;
   const panelX = (width - panelW) / 2;
   const panelY = (height - panelH) / 2;
   setRect(ui.title.userData.panel, panelX, panelY, panelW, panelH, 60);
+  const headerRect = setRect(
+    ui.title.userData.header,
+    panelX,
+    panelY,
+    panelW,
+    64,
+    65
+  );
+  ui.title.userData.header.position.z = 65;
+  setRect(ui.title.userData.headerGlow, panelX - 120, panelY, 120, 64, 66);
+  ui.title.userData.headerGlow.material.opacity = 0;
+  setCircle(
+    ui.title.userData.headerIconOuter,
+    headerRect.x + 44,
+    headerRect.y + 32,
+    16,
+    66
+  );
+  setCircle(
+    ui.title.userData.headerIconInner,
+    headerRect.x + 44,
+    headerRect.y + 32,
+    7,
+    67
+  );
   const titleSize = ui.title.userData.title.mesh.userData.size;
+  const titleX = panelX + panelW / 2;
+  const titleY = panelY + 16 + titleSize.h / 2;
+  ui.title.userData.titleShadow.setCentered(titleX + 2, titleY + 2);
   const subSize = ui.title.userData.sub.mesh.userData.size;
   ui.title.userData.title.setCentered(
-    panelX + panelW / 2,
-    panelY + 36 + titleSize.h / 2
+    titleX,
+    titleY
   );
+  const badgeW = 96;
+  const badgeH = 26;
+  setRect(ui.title.userData.modeBadgeBg, panelX + panelW - badgeW - 20, panelY + 18, badgeW, badgeH, 70);
+  ui.title.userData.modeBadgeText.setCentered(
+    panelX + panelW - badgeW / 2 - 20,
+    panelY + 31
+  );
+  const hyperW = 130;
+  const hyperH = 24;
+  setRect(ui.title.userData.hyperBadgeBg, panelX + 24, panelY + 86, hyperW, hyperH, 60);
+  ui.title.userData.hyperBadgeText.setCentered(panelX + 24 + hyperW / 2, panelY + 98);
+  setRect(ui.title.userData.goldLine, panelX + 24, panelY + 120, panelW - 48, 6, 55);
   ui.title.userData.sub.setCentered(
     panelX + panelW / 2,
-    panelY + 86 + subSize.h / 2
+    panelY + 128 + subSize.h / 2
   );
   const buttonW = 180;
   const buttonH = 44;
   const buttonGap = 12;
-  const startY = panelY + 130;
+  const startY = panelY + 170;
   const centerX = panelX + panelW / 2;
   const easyRect = setRect(
     ui.title.userData.easyBtn.bg,
@@ -896,6 +1419,14 @@ function layoutTitleScreen() {
     65
   );
   ui.title.userData.easyBtn.label.setCentered(centerX, startY + 22);
+  const easyOutlineRect = setRect(
+    ui.title.userData.easyBtn.outline,
+    centerX - buttonW / 2 - 3,
+    startY - 3,
+    buttonW + 6,
+    buttonH + 6,
+    66
+  );
   const normalRect = setRect(
     ui.title.userData.normalBtn.bg,
     centerX - buttonW / 2,
@@ -907,6 +1438,14 @@ function layoutTitleScreen() {
   ui.title.userData.normalBtn.label.setCentered(
     centerX,
     startY + buttonH + buttonGap + 22
+  );
+  const normalOutlineRect = setRect(
+    ui.title.userData.normalBtn.outline,
+    centerX - buttonW / 2 - 3,
+    startY + buttonH + buttonGap - 3,
+    buttonW + 6,
+    buttonH + 6,
+    66
   );
   const hardRect = setRect(
     ui.title.userData.hardBtn.bg,
@@ -920,6 +1459,14 @@ function layoutTitleScreen() {
     centerX,
     startY + (buttonH + buttonGap) * 2 + 22
   );
+  const hardOutlineRect = setRect(
+    ui.title.userData.hardBtn.outline,
+    centerX - buttonW / 2 - 3,
+    startY + (buttonH + buttonGap) * 2 - 3,
+    buttonW + 6,
+    buttonH + 6,
+    66
+  );
   const startYOutside = panelY + panelH + 18;
   const btnRect = setRect(
     ui.title.userData.btn.bg,
@@ -930,25 +1477,41 @@ function layoutTitleScreen() {
     65
   );
   ui.title.userData.btn.label.setCentered(centerX, startYOutside + 28);
+  const settingsRect = setRect(
+    ui.title.userData.settingsBtn.bg,
+    centerX - 70,
+    startYOutside + 68,
+    140,
+    44,
+    65
+  );
+  ui.title.userData.settingsBtn.label.setCentered(centerX, startYOutside + 90);
   ui.buttons.titleStart.rect = btnRect;
+  ui.buttons.titleSettings.rect = settingsRect;
   ui.buttons.modeEasy.rect = easyRect;
   ui.buttons.modeNormal.rect = normalRect;
   ui.buttons.modeHard.rect = hardRect;
+  setModeOutlineImmediate();
+  captureTitleAnimation();
 }
 
 function buildTutorialScreen() {
-  const overlay = createPanel("#000000", 0.55);
-  const panel = createPanel("#ffffff", 0.98);
+  const overlay = createPanel("#000000", 0.35);
+  const panel = createPanel(theme.panel, 0.98, 24, "panel");
   const title = createTextSprite("\u30C1\u30E5\u30FC\u30C8\u30EA\u30A2\u30EB", {
     fontSize: 24,
-    color: "#2b2233",
+    color: theme.textDark,
     weight: "900",
   });
+  const iconGroup = new THREE.Group();
+  const cubeIcon = createIconSprite(makeCubeIconTexture());
+  const handIcon = createIconSprite(makeHandIconTexture());
+  iconGroup.add(cubeIcon.mesh, handIcon.mesh);
   const step1 = createTextSprite(
     "\u30BF\u30A4\u30EB\u3092\u30AF\u30EA\u30C3\u30AF\u3057\u30663\u3064\u9078\u629E",
     {
       fontSize: 20,
-      color: "#2b2233",
+      color: theme.textDark,
       weight: "800",
     }
   );
@@ -956,7 +1519,7 @@ function buildTutorialScreen() {
     "\u540C\u3058\u30D5\u30EB\u30FC\u30C4\u3067\u3042\u308C\u3070\u6D88\u53BB",
     {
       fontSize: 20,
-      color: "#2b2233",
+      color: theme.textDark,
       weight: "800",
     }
   );
@@ -964,7 +1527,7 @@ function buildTutorialScreen() {
     "\u3069\u3053\u3067\u3082OK\u30FB3\u3064\u63C3\u3048\u308B\u3068\u52A0\u70B9",
     {
       fontSize: 20,
-      color: "#2b2233",
+      color: theme.textDark,
       weight: "800",
     }
   );
@@ -973,12 +1536,24 @@ function buildTutorialScreen() {
     overlay,
     panel,
     title.mesh,
+    iconGroup,
     step1.mesh,
     step2.mesh,
     step3.mesh,
     btn.group
   );
-  ui.tutorial.userData = { overlay, panel, title, step1, step2, step3, btn };
+  ui.tutorial.userData = {
+    overlay,
+    panel,
+    title,
+    iconGroup,
+    cubeIcon,
+    handIcon,
+    step1,
+    step2,
+    step3,
+    btn,
+  };
   ui.buttons.tutorialPlay = {
     rect: { x: 0, y: 0, w: 0, h: 0 },
     onClick: () => {
@@ -991,45 +1566,177 @@ function layoutTutorialScreen() {
   const overlay = ui.tutorial.userData.overlay;
   setRect(overlay, 0, 0, width, height, 50);
   const panelW = Math.min(620, width - 40);
-  const panelH = 320;
+  const panelH = 360;
   const panelX = (width - panelW) / 2;
   const panelY = (height - panelH) / 2;
   setRect(ui.tutorial.userData.panel, panelX, panelY, panelW, panelH, 60);
-  ui.tutorial.userData.title.setPosition(panelX + 24, panelY + 30);
-  ui.tutorial.userData.step1.setPosition(panelX + 24, panelY + 90);
-  ui.tutorial.userData.step2.setPosition(panelX + 24, panelY + 140);
-  ui.tutorial.userData.step3.setPosition(panelX + 24, panelY + 190);
+  ui.tutorial.userData.title.setPosition(panelX + 24, panelY + 24);
+  const iconCenterX = panelX + panelW / 2;
+  const iconCenterY = panelY + 90;
+  ui.tutorial.userData.iconGroup.position.set(0, 0, 0);
+  ui.tutorial.userData.cubeIcon.setCentered(iconCenterX - 60, iconCenterY);
+  ui.tutorial.userData.handIcon.setCentered(iconCenterX + 20, iconCenterY + 8);
+  ui.tutorial.userData.iconBase = {
+    cubePos: ui.tutorial.userData.cubeIcon.mesh.position.clone(),
+    handPos: ui.tutorial.userData.handIcon.mesh.position.clone(),
+    cubeScale: ui.tutorial.userData.cubeIcon.mesh.scale.clone(),
+    handScale: ui.tutorial.userData.handIcon.mesh.scale.clone(),
+  };
+  ui.tutorial.userData.step1.setPosition(panelX + 24, panelY + 140);
+  ui.tutorial.userData.step2.setPosition(panelX + 24, panelY + 190);
+  ui.tutorial.userData.step3.setPosition(panelX + 24, panelY + 240);
   const btnRect = setRect(
     ui.tutorial.userData.btn.bg,
     panelX + panelW / 2 - 90,
-    panelY + 240,
+    panelY + 290,
     180,
     56,
     65
   );
   ui.tutorial.userData.btn.label.setCentered(
     panelX + panelW / 2,
-    panelY + 268
+    panelY + 318
   );
   ui.buttons.tutorialPlay.rect = btnRect;
 }
 
+function buildSettingsScreen() {
+  const overlay = createPanel("#000000", 0.35);
+  const panel = createPanel(theme.panel, 0.98, 24, "panel");
+  const title = createTextSprite("設定", {
+    fontSize: 24,
+    color: theme.textDark,
+    weight: "900",
+  });
+  const nameLabel = createTextSprite("プレイヤー名", {
+    fontSize: 18,
+    color: theme.textMid,
+    weight: "800",
+  });
+  const nameValue = createTextSprite(playerName, {
+    fontSize: 22,
+    color: theme.textDark,
+    weight: "900",
+  });
+  const changeBtn = createButton("名前変更", { radius: 24, style: "button" });
+  const backBtn = createButton("ゲームに戻る", { radius: 22, style: "button" });
+  ui.settings.add(
+    overlay,
+    panel,
+    title.mesh,
+    nameLabel.mesh,
+    nameValue.mesh,
+    changeBtn.group,
+    backBtn.group
+  );
+  ui.settings.userData = { overlay, panel, title, nameLabel, nameValue, changeBtn, backBtn };
+  ui.buttons.settingsName = {
+    rect: { x: 0, y: 0, w: 0, h: 0 },
+    onClick: () => {
+      const next = promptPlayerName({ allowCancel: true });
+      if (next) savePlayerName(next);
+    },
+  };
+  ui.buttons.settingsBack = {
+    rect: { x: 0, y: 0, w: 0, h: 0 },
+    onClick: () => {
+      state = settingsReturnState;
+    },
+  };
+}
+
+function layoutSettingsScreen() {
+  const overlay = ui.settings.userData.overlay;
+  setRect(overlay, 0, 0, width, height, 50);
+  const panelW = Math.min(420, width - 40);
+  const panelH = 260;
+  const panelX = (width - panelW) / 2;
+  const panelY = (height - panelH) / 2;
+  setRect(ui.settings.userData.panel, panelX, panelY, panelW, panelH, 60);
+  ui.settings.userData.title.setPosition(panelX + 24, panelY + 28);
+  ui.settings.userData.nameLabel.setPosition(panelX + 24, panelY + 88);
+  ui.settings.userData.nameValue.setPosition(panelX + 24, panelY + 118);
+  const changeRect = setRect(
+    ui.settings.userData.changeBtn.bg,
+    panelX + panelW / 2 - 90,
+    panelY + 160,
+    180,
+    48,
+    65
+  );
+  ui.settings.userData.changeBtn.label.setCentered(panelX + panelW / 2, panelY + 184);
+  const backRect = setRect(
+    ui.settings.userData.backBtn.bg,
+    panelX + panelW / 2 - 70,
+    panelY + panelH - 60,
+    140,
+    42,
+    65
+  );
+  ui.settings.userData.backBtn.label.setCentered(panelX + panelW / 2, panelY + panelH - 39);
+  ui.buttons.settingsName.rect = changeRect;
+  ui.buttons.settingsBack.rect = backRect;
+}
+
+function updateSettingsNameDisplay() {
+  if (!ui.settings.userData) return;
+  ui.settings.userData.nameValue.update(playerName);
+  layoutSettingsScreen();
+}
+
+function openSettings(returnState) {
+  settingsReturnState = returnState || "title";
+  updateSettingsNameDisplay();
+  state = "settings";
+}
+
 function buildEndScreen() {
-  const overlay = createPanel("#000000", 0.5);
-  const panel = createPanel("#ffffff", 0.95);
+  const overlay = createPanel("#000000", 0.35);
+  const panel = createPanel(theme.panel, 0.95, 24, "panel");
   const title = createTextSprite("結果", {
     fontSize: 24,
-    color: "#2b2233",
+    color: theme.textDark,
     weight: "900",
   });
   const result = createTextSprite("スコア: 0", {
     fontSize: 20,
-    color: "#2b2233",
+    color: theme.textDark,
     weight: "800",
   });
+  const rankingTitle = createTextSprite("ランキング", {
+    fontSize: 20,
+    color: theme.textDark,
+    weight: "800",
+  });
+  const rankingLines = [];
+  for (let i = 0; i < rankingSize; i++) {
+    rankingLines.push(
+      createTextSprite(`${i + 1}. ---`, {
+        fontSize: 18,
+        color: i === 0 ? theme.accent : theme.textMid,
+        weight: "700",
+      })
+    );
+  }
   const btn = createButton("もう一度");
-  ui.end.add(overlay, panel, title.mesh, result.mesh, btn.group);
-  ui.end.userData = { overlay, panel, title, result, btn };
+  ui.end.add(
+    overlay,
+    panel,
+    title.mesh,
+    result.mesh,
+    rankingTitle.mesh,
+    btn.group
+  );
+  rankingLines.forEach((line) => ui.end.add(line.mesh));
+  ui.end.userData = {
+    overlay,
+    panel,
+    title,
+    result,
+    rankingTitle,
+    rankingLines,
+    btn,
+  };
   ui.buttons.retry = {
     rect: { x: 0, y: 0, w: 0, h: 0 },
     onClick: () => {
@@ -1041,22 +1748,28 @@ function buildEndScreen() {
 function layoutEndScreen() {
   const overlay = ui.end.userData.overlay;
   setRect(overlay, 0, 0, width, height, 50);
-  const panelW = Math.min(420, width - 40);
-  const panelH = 220;
+  const panelW = Math.min(480, width - 40);
+  const panelH = 460;
   const panelX = (width - panelW) / 2;
   const panelY = (height - panelH) / 2;
   setRect(ui.end.userData.panel, panelX, panelY, panelW, panelH, 60);
-  ui.end.userData.title.setPosition(panelX + 24, panelY + 32);
-  ui.end.userData.result.setPosition(panelX + 24, panelY + 90);
+  ui.end.userData.title.setPosition(panelX + 24, panelY + 24);
+  ui.end.userData.result.setPosition(panelX + 24, panelY + 70);
+  ui.end.userData.rankingTitle.setPosition(panelX + 24, panelY + 120);
+  const listStartY = panelY + 150;
+  const lineGap = 22;
+  ui.end.userData.rankingLines.forEach((line, idx) => {
+    line.setPosition(panelX + 24, listStartY + idx * lineGap);
+  });
   const btnRect = setRect(
     ui.end.userData.btn.bg,
     panelX + panelW / 2 - 80,
-    panelY + 130,
+    panelY + panelH - 66,
     160,
     52,
     65
   );
-  ui.end.userData.btn.label.setCentered(panelX + panelW / 2, panelY + 156);
+  ui.end.userData.btn.label.setCentered(panelX + panelW / 2, panelY + panelH - 40);
   ui.buttons.retry.rect = btnRect;
 }
 
@@ -1065,7 +1778,7 @@ function buildTip() {
     "同じフルーツを3つ選んで消そう。",
     {
       fontSize: 18,
-      color: "#003cffff",
+      color: theme.accent,
       weight: "700",
     }
   );
@@ -1146,8 +1859,9 @@ function goHome() {
 function setMode(label, size) {
   modeLabel = label;
   cubeSize = size;
-  const title = ui.title.userData.title;
-  title.update(`\u30B0\u30C3\u30BA\u30BD\u30FC\u30C8\u30D1\u30BA\u30EB ${size}x${size}x${size}`);
+  const badgeText = ui.title.userData.modeBadgeText;
+  if (badgeText) badgeText.update(`${size}x${size}x${size}`);
+  animateModeOutline(size);
   layout();
   createBoard();
   syncTiles();
@@ -1158,10 +1872,17 @@ function endGame() {
   state = "end";
   playClearEffect();
   const result = ui.end.userData.result;
-  if (result) {
-    result.update(`スコア: ${score}`);
-    layoutEndScreen();
+  if (result) result.update(`スコア: ${score}  時間: ${formatElapsed(elapsedMs)}`);
+  if (needsNameInput) {
+    const next = promptPlayerName({ allowCancel: false });
+    savePlayerName(next);
+    needsNameInput = false;
   }
+  addRankingEntry(elapsedMs);
+  if (!bestTimeMs || elapsedMs < bestTimeMs) {
+    saveBestTime(elapsedMs);
+  }
+  layoutEndScreen();
 }
 
 function playClearEffect() {
@@ -1218,7 +1939,7 @@ function playMatchSound(count) {
 }
 
 function createBackground() {
-  const plane = createPanel("#ffffff", 1);
+  const plane = createPanel("#ffffff", 1, 0, "flat");
   const texture = makeGradientTexture();
   plane.material.map = texture;
   plane.material.needsUpdate = true;
@@ -1231,11 +1952,45 @@ function makeGradientTexture() {
   canvas.height = 512;
   const ctx = canvas.getContext("2d");
   const gradient = ctx.createLinearGradient(0, 0, 512, 512);
-  gradient.addColorStop(0, "#ffe3f4");
-  gradient.addColorStop(0.5, "#fff8b8");
-  gradient.addColorStop(1, "#bdf7ff");
+  gradient.addColorStop(0, theme.bgGradient[0]);
+  gradient.addColorStop(0.5, theme.bgGradient[1]);
+  gradient.addColorStop(1, theme.bgGradient[2]);
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 512, 512);
+  ctx.globalAlpha = 0.2;
+  for (let i = 0; i < 28; i++) {
+    const radius = 14 + Math.random() * 28;
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 0.15;
+  for (let i = 0; i < 140; i++) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    ctx.fillStyle = "#dcdcdc";
+    ctx.fillRect(x, y, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  return new THREE.CanvasTexture(canvas);
+}
+
+function makeHeaderSweepTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+  gradient.addColorStop(0, "rgba(255,255,255,0)");
+  gradient.addColorStop(0.4, "rgba(255,255,255,0.18)");
+  gradient.addColorStop(0.55, "rgba(255,255,255,0.5)");
+  gradient.addColorStop(0.7, "rgba(255,255,255,0.12)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   return new THREE.CanvasTexture(canvas);
 }
 
@@ -1248,8 +2003,8 @@ function createBoardFrame() {
   );
 }
 
-function createPanel(color, opacity, radius = 18) {
-  const texture = makeRoundedPanelTexture(color, radius);
+function createPanel(color, opacity, radius = 18, style = "panel") {
+  const texture = makeRoundedPanelTexture(color, radius, style);
   return new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({
@@ -1260,27 +2015,126 @@ function createPanel(color, opacity, radius = 18) {
   );
 }
 
-function makeRoundedPanelTexture(color, radius) {
+function hexToRgb(hex) {
+  const value = hex.replace("#", "");
+  if (value.length !== 6) return { r: 255, g: 255, b: 255 };
+  const num = parseInt(value, 16);
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255,
+  };
+}
+
+function adjustHexColor(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  const clampChannel = (val) => Math.max(0, Math.min(255, val));
+  const next = {
+    r: clampChannel(Math.round(r + 255 * amount)),
+    g: clampChannel(Math.round(g + 255 * amount)),
+    b: clampChannel(Math.round(b + 255 * amount)),
+  };
+  return `rgb(${next.r}, ${next.g}, ${next.b})`;
+}
+
+function makeRoundedPanelTexture(color, radius, style) {
   const size = 256;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = color;
-  ctx.beginPath();
   const r = Math.max(4, Math.min(radius, size / 2));
-  roundedRect(ctx, 0, 0, size, size, r);
-  ctx.fill();
-  // Glossy highlight
-  const gradient = ctx.createLinearGradient(0, 0, 0, size * 0.7);
-  gradient.addColorStop(0, "rgba(255,255,255,0.65)");
-  gradient.addColorStop(0.5, "rgba(255,255,255,0.1)");
-  gradient.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = gradient;
+  if (style === "outline") {
+    ctx.shadowColor = "rgba(255,255,255,0.6)";
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    roundedRect(ctx, 10, 10, size - 20, size - 20, r);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(217,179,108,0.9)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    roundedRect(ctx, 12, 12, size - 24, size - 24, r);
+    ctx.stroke();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  if (style !== "flat") {
+    ctx.shadowColor = theme.panelShadow;
+    ctx.shadowBlur = style === "panel" ? 16 : 12;
+    ctx.shadowOffsetY = style === "panel" ? 6 : 4;
+  }
+  if (style === "button") {
+    const top = adjustHexColor(color, 0.12);
+    const bottom = adjustHexColor(color, -0.08);
+    const gradient = ctx.createLinearGradient(0, 0, 0, size);
+    gradient.addColorStop(0, top);
+    gradient.addColorStop(1, bottom);
+    ctx.fillStyle = gradient;
+  } else if (style === "mode") {
+    const top = adjustHexColor(color, 0.06);
+    const bottom = adjustHexColor(color, -0.04);
+    const gradient = ctx.createLinearGradient(0, 0, 0, size);
+    gradient.addColorStop(0, top);
+    gradient.addColorStop(1, bottom);
+    ctx.fillStyle = gradient;
+  } else {
+    ctx.fillStyle = color;
+  }
   ctx.beginPath();
-  roundedRect(ctx, 6, 6, size - 12, size * 0.55, r * 0.8);
+  roundedRect(ctx, 8, 8, size - 16, size - 16, r);
   ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  if (style !== "flat") {
+    if (style === "panel" || style === "mode" || style === "button") {
+      const gradient = ctx.createLinearGradient(0, 0, 0, size * 0.7);
+      gradient.addColorStop(0, "rgba(255,255,255,0.7)");
+      gradient.addColorStop(0.42, "rgba(255,255,255,0.2)");
+      gradient.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      roundedRect(ctx, 16, 16, size - 32, size * 0.45, r * 0.7);
+      ctx.fill();
+    }
+    if (style === "button") {
+      const sheen = ctx.createLinearGradient(0, 0, size, 0);
+      sheen.addColorStop(0, "rgba(255,255,255,0)");
+      sheen.addColorStop(0.42, "rgba(255,255,255,0.2)");
+      sheen.addColorStop(0.54, "rgba(255,255,255,0.5)");
+      sheen.addColorStop(0.68, "rgba(255,255,255,0.16)");
+      sheen.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.save();
+      ctx.translate(size * 0.12, size * 0.02);
+      ctx.rotate(-0.12);
+      ctx.fillStyle = sheen;
+      ctx.beginPath();
+      roundedRect(ctx, 20, 30, size - 40, size * 0.4, r * 0.7);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (style === "button") {
+      ctx.strokeStyle = "rgba(0,0,0,0.08)";
+      ctx.lineWidth = 2;
+    } else {
+      ctx.strokeStyle = style === "mode" ? "rgba(0,0,0,0.1)" : theme.panelStroke;
+      ctx.lineWidth = style === "panel" ? 3 : 2;
+    }
+    ctx.beginPath();
+    roundedRect(ctx, 10, 10, size - 20, size - 20, r);
+    ctx.stroke();
+    if (style === "button") {
+      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      roundedRect(ctx, 12, 20, size - 24, size - 36, r * 0.7);
+      ctx.stroke();
+    }
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
   return texture;
@@ -1298,36 +2152,49 @@ function roundedRect(ctx, x, y, w, h, r) {
   ctx.quadraticCurveTo(x, y, x + r, y);
 }
 
-function createButton(label) {
-  const bg = createPanel("#ffe36e", 1);
+function createButton(label, options = {}) {
+  const bgColor = options.bgColor || theme.button;
+  const textColor = options.textColor || theme.buttonText;
+  const fontSize = options.fontSize || 22;
+  const radius = options.radius ?? 22;
+  const style = options.style || "button";
+  const bg = createPanel(bgColor, 1, radius, style);
   const labelText = createTextSprite(label, {
-    fontSize: 22,
-    color: "#1c0f2e",
+    fontSize,
+    color: textColor,
     weight: "900",
   });
+  const outline = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      map: makeRoundedPanelTexture("rgba(0,0,0,0)", radius, "outline"),
+      transparent: true,
+      opacity: 0,
+    })
+  );
   const group = new THREE.Group();
   group.add(bg, labelText.mesh);
-  return { group, bg, label: labelText };
+  return { group, bg, label: labelText, outline };
 }
 
 function createTextSprite(text, options) {
   const settings = {
     fontSize: options.fontSize || 24,
-    color: options.color || "#2b2233",
+    color: options.color || theme.textDark,
     weight: options.weight || "700",
     glow: options.glow || false,
   };
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const padding = 12;
-  ctx.font = `${settings.weight} ${settings.fontSize}px "Trebuchet MS", "Segoe UI", sans-serif`;
+  ctx.font = `${settings.weight} ${settings.fontSize}px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Trebuchet MS", sans-serif`;
   const metrics = ctx.measureText(text);
   const textWidth = Math.ceil(metrics.width);
   const textHeight = Math.ceil(settings.fontSize * 1.2);
   canvas.width = textWidth + padding * 2;
   canvas.height = textHeight + padding * 2;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = `${settings.weight} ${settings.fontSize}px "Trebuchet MS", "Segoe UI", sans-serif`;
+  ctx.font = `${settings.weight} ${settings.fontSize}px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Trebuchet MS", sans-serif`;
   ctx.textBaseline = "top";
   if (settings.glow) {
     ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
@@ -1363,14 +2230,14 @@ function updateTextTexture(mesh, text, settings) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const padding = 12;
-  ctx.font = `${settings.weight} ${settings.fontSize}px "Trebuchet MS", "Segoe UI", sans-serif`;
+  ctx.font = `${settings.weight} ${settings.fontSize}px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Trebuchet MS", sans-serif`;
   const metrics = ctx.measureText(text);
   const textWidth = Math.ceil(metrics.width);
   const textHeight = Math.ceil(settings.fontSize * 1.2);
   canvas.width = textWidth + padding * 2;
   canvas.height = textHeight + padding * 2;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = `${settings.weight} ${settings.fontSize}px "Trebuchet MS", "Segoe UI", sans-serif`;
+  ctx.font = `${settings.weight} ${settings.fontSize}px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Trebuchet MS", sans-serif`;
   ctx.textBaseline = "top";
   if (settings.glow) {
     ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
@@ -1385,10 +2252,121 @@ function updateTextTexture(mesh, text, settings) {
   mesh.userData.size = { w: canvas.width, h: canvas.height };
 }
 
+function createIconSprite(texture) {
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+  const size = { w: texture.image.width, h: texture.image.height };
+  mesh.userData.size = size;
+  return {
+    mesh,
+    setPosition(x, y) {
+      setRect(mesh, x, y, size.w, size.h, 80);
+    },
+    setCentered(cx, cy) {
+      setRect(mesh, cx - size.w / 2, cy - size.h / 2, size.w, size.h, 80);
+    },
+  };
+}
+
+function makeCubeIconTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const centerX = 64;
+  const centerY = 68;
+  const size = 34;
+  const top = [
+    { x: centerX, y: centerY - size },
+    { x: centerX + size, y: centerY - size * 0.4 },
+    { x: centerX, y: centerY + size * 0.2 },
+    { x: centerX - size, y: centerY - size * 0.4 },
+  ];
+  const left = [
+    { x: centerX - size, y: centerY - size * 0.4 },
+    { x: centerX, y: centerY + size * 0.2 },
+    { x: centerX, y: centerY + size * 1.2 },
+    { x: centerX - size, y: centerY + size * 0.6 },
+  ];
+  const right = [
+    { x: centerX + size, y: centerY - size * 0.4 },
+    { x: centerX, y: centerY + size * 0.2 },
+    { x: centerX, y: centerY + size * 1.2 },
+    { x: centerX + size, y: centerY + size * 0.6 },
+  ];
+  ctx.fillStyle = theme.accent;
+  ctx.beginPath();
+  top.forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = adjustHexColor(theme.accent, -0.1);
+  ctx.beginPath();
+  left.forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = adjustHexColor(theme.accent, -0.2);
+  ctx.beginPath();
+  right.forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.2)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  [...top, ...right, ...left].forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.stroke();
+  return new THREE.CanvasTexture(canvas);
+}
+
+function makeHandIconTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "rgba(0,0,0,0.18)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  roundedRect(ctx, 34, 40, 60, 46, 16);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.fillStyle = "#ffffff";
+  ctx.arc(54, 34, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "rgba(0,0,0,0.08)";
+  ctx.beginPath();
+  roundedRect(ctx, 40, 52, 48, 28, 12);
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
+}
+
 function setRect(mesh, x, y, w, h, z = 0) {
   mesh.scale.set(w, h, 1);
   mesh.position.set(x + w / 2, height - (y + h / 2), z);
   return { x, y, w, h };
+}
+
+function setCircle(mesh, cx, cy, radius, z = 0) {
+  mesh.scale.set(radius, radius, 1);
+  mesh.position.set(cx, height - cy, z);
 }
 
 function applyRotationDelta(dx, dy) {
